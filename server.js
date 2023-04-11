@@ -4,7 +4,9 @@
 //since I will be saving it "wrong" in the db, I have to check the current time in db here and calculate the time difference,
 //then I apply the correctness and send it corrected to android 
 
-//todo: APPLY 2m40s of correctness!
+//todo: APPLY 2m50s of correctness!
+
+//todo: trocar os parâmetros invés de json no body para query params. Assim posso trocar alguns POST para GET, sendo mais semântico.
 
 
 const express = require("express");
@@ -176,17 +178,9 @@ async function getMamadas(data, n) {
   try {
     const connection = await pool.getConnection();
     
-    //the average is not consulted by the app, it is calculated at the time consulting the last 24h amounts.
-    //the averages registered in db are for analisys purposes
-    //todo: I need to remove "color" row from the db, I need to load it from station table. Once user changes its color, I will be fine this way
-      //1 - query the username, station, datetime and amount - done
-      //2 - take the distinct users using the chatGPT advice (out of this function) - done
-      //3 - query users's colors (new function) - done
-      //think better those nex step, I am sleepy now. I can process this data here in node and respond a JSON with it already done
-      //4 - create the last json in the route (todo)
-      
-    const [mamadas, fields] = await connection.query(`SELECT username, color, station, datetime, amount FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC LIMIT ${n}`);
-    
+    //querying the db already applying the plus 2m50s correctness      
+    const [mamadas, fields] = await connection.query(`SELECT username, station, DATE_ADD(datetime, INTERVAL '2:50' MINUTE_SECOND) AS datetime, amount FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC LIMIT ${n}`);
+
     connection.release();
     
     console.log(`getMamadas(${n}) return: `, mamadas);
@@ -240,19 +234,59 @@ async function getUsersColors(usersArray, station) {
   }
 }
 
-async function calculateAverages(data) {
-  //todo: finish this function
-  //1 - get last 6h amounts, 12h amounts and 24h amounts
-  //2 - calculate 3 averages :D
+async function getAndCalculateAverages(data) {
+
   try {
     const connection = await pool.getConnection();
     
-    const [amounts24, fields] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`);       
+    const [amounts06, fields06] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 6 HOUR)`);   
+    const [amounts12, fields12] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 12 HOUR)`);
+    const [amounts24, fields24] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`);
+    const [amountsAndTimeAll, fieldsAllTime] = await connection.query(`SELECT amount, datetime FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC`);
 
     connection.release();
-
-    console.log(`calculateAverages(req.body) return: `, amounts24);
-    //return ;
+    
+    async function calculateAverage(amounts, hours) {
+      let sum = 0;
+      
+      for(let k = 0; k < amounts.length; k++) {
+        sum += amounts[k].amount;
+      }
+      
+      let average = (sum/hours).toFixed(2);
+      
+      return average;
+    } 
+    
+    async function calculateAverageAllTime(amounts) {
+      let sum = 0;
+      const firstDatetime = new Date(amounts[amounts.length-1].datetime);
+      const lastDatetime = new Date(amounts[0].datetime);
+      
+      const timeDiff = Math.abs(lastDatetime - firstDatetime);
+      const hoursDiff = ((timeDiff / 1000) / 60) / 60;
+      
+      for(let k = 0; k < amounts.length; k++) {
+        sum += amounts[k].amount;
+      }
+    
+      console.log(hoursDiff);      
+      console.log(sum/hoursDiff);
+      
+      const averageAllTime = (sum/hoursDiff).toFixed(2);
+      
+      return averageAllTime;
+    }
+        
+    const averagesObject = {
+      average06: await calculateAverage(amounts06, 6),
+      average12: await calculateAverage(amounts12, 12),
+      average24: await calculateAverage(amounts24, 24),
+      averageAllTime: await calculateAverageAllTime(amountsAndTimeAll)
+    }
+    
+    console.log(`getAndCalculateAverages(`, data, `) return: `, averagesObject);
+    return averagesObject;
   }
   catch(error) {
     console.log("Error querying the database:", error);
@@ -260,24 +294,64 @@ async function calculateAverages(data) {
   } 
 }
 
+async function makeScreenDataObject(lastMamadas, uniqueUsersArray, uniqueColorsArray, averagesObject) {
+  var usernameArray = [];
+  var stationArray = [];
+  var timeArray = [];
+  var amountArray = [];
+  var colorArray = [];
+  var hours = "";
+  var minutes = "";
+  
+  for(let k = 0; k < lastMamadas.length; k++) {
+    usernameArray[k] = lastMamadas[k].username;
+    stationArray[k] = lastMamadas[k].station;
+    hours = lastMamadas[k].datetime.getHours().toString().padStart(2, '0');
+    minutes = lastMamadas[k].datetime.getMinutes().toString().padStart(2, '0');
+    timeArray[k] = `${hours}:${minutes}`;
+    amountArray[k] = lastMamadas[k].amount;
+    
+    for(let i = 0; i < uniqueUsersArray.length; i++) {
+      if(lastMamadas[k].username == uniqueUsersArray[i]) {
+        colorArray[k] = uniqueColorsArray[i];
+        break;
+      }
+    }
+  }
+  
+  const screenDataObject = {
+    usernameArray: usernameArray,
+    stationArray: stationArray,
+    timeArray: timeArray,
+    amountArray: amountArray,
+    colorArray: colorArray,
+    average06: averagesObject.average06,
+    average12: averagesObject.average12,
+    average24: averagesObject.average24,
+    averageAllTime: averagesObject.averageAllTime
+  }
+  
+  console.log(`makeScreenDataObject(lastMamadas, uniqueUsersArray, uniqueColorsArray, averagesObject) return `, screenDataObject);
+  return screenDataObject;
+}
+
 app.route("/getMamadasScreenData").post(async (req, res) => {
+  //the average is not consulted by the app, it is calculated at the time consulting the last 24h amounts.
+  //the averages registered in db are for analisys purposes
+  
   const usernameClient = req.body.username;
   const stationClient = req.body.station;
   const userColorClient = req.body.userColor; 
   
   try {
-    const last6Mamadas = await getMamadas(req.body, 6);
-    const uniqueUsersArray = await getDistinctUsernames(last6Mamadas);
-    const colorsArray = await getUsersColors(uniqueUsersArray, req.body.station);
-    await calculateAverages(req.body);
-    //getAverages() //at a given time, not loading from the db. Calculate it
-    //calculate averages
-    //make the json with all the data set, each mamada with all data (color included) and averages at the end
+    const last6Mamadas = await getMamadas(req.body, 6); //object array: username, station, datetime ("2023-04-10T16:04:15.000Z"), amount
+    const uniqueUsersArray = await getDistinctUsernames(last6Mamadas); //array: distinct usernames
+    const uniqueColorsArray = await getUsersColors(uniqueUsersArray, req.body.station); //array: distinct colors
+    const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
     
-    res.json(last6Mamadas);
-    //res.json deve ter json final {username, color(loaded by colorsArray[k] if username is uniqueUsersArrau[k]), station, time(00:00 format), amount,
-      //3 averages(load 6,12,24h amounts and divide by number of samples)}
+    const screenDataObject = await makeScreenDataObject(last6Mamadas, uniqueUsersArray, uniqueColorsArray, averagesObject);        
     
+    res.json(screenDataObject);    
     
   }
   catch(error) {
@@ -287,8 +361,15 @@ app.route("/getMamadasScreenData").post(async (req, res) => {
 });
 
 //todo: post na rota "/mamada"
-//todo: get na rota "/mamada"
-//todo: get na rota "/pending": checa se está pendente ou é owner de station com pending users 
+  //verifica a média antes de postar (para registrar no banco o valor das médias quando ela ficou com fome), pode ser pelo post na "/getMamadasScreenData", pelo menos por enquanto
+  //client envia username, station, (color client pega do banco), time*, amount. As médias são calculadas na hora de postar, com os dados do db.
+  
+  //Fazer a primeira versão sem poder postar um tempo passado, somente no tempo atual
+  //todo: *(se não editar o time, pega o time do banco + 2m50s, se editar aí tenho que ver como fazer. As médias terão que ser calculadas somente até aquele momento mencionado)
+  //todo: pra ficar bem top, tem que recalcular todas as médias posteriores ao post da mamada com o tempo editado, pois interferiu né...
+
+  //todo: get na rota "/pending": checa se está pendente ou é owner de station com pending users 
+
 
 //daqui pra baixo apenas reciclei o código anterior, deletar
 
@@ -470,14 +551,14 @@ app.route("/highscore").post(async (req, res) => {
 
 /*
 
-INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `color`, `station`) VALUES ('teste1', NOW(), 120, 0, 0, 0, '#ffff0000', 'stationTeste1');
+INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `station`) VALUES ('teste1', NOW(), 120, 0, 0, 0, 'stationTeste1');
 
-INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `color`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 1 HOUR)), 30, 0, 0, 0, '#ffff0000', 'stationTeste1');
+INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 1 HOUR)), 30, 0, 0, 0, 'stationTeste1');
 
-INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `color`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 2 HOUR)), 60, 0, 0, 0, '#ffff0000', 'stationTeste1');
+INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 2 HOUR)), 60, 0, 0, 0, 'stationTeste1');
 
-INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `color`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 23 HOUR)), 90, 0, 0, 0, '#ffff0000', 'stationTeste1');
+INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 23 HOUR)), 90, 0, 0, 0, 'stationTeste1');
 
-INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `color`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 24 HOUR)), 120, 0, 0, 0, '#ffff0000', 'stationTeste1');
+INSERT INTO `mamada`(`username`, `datetime`, `amount`, `average_6`, `average_12`, `average_24`, `station`) VALUES ('teste1', (DATE_SUB(NOW(), INTERVAL 24 HOUR)), 120, 0, 0, 0, 'stationTeste1');
 
 */
