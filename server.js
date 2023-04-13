@@ -4,9 +4,16 @@
 //since I will be saving it "wrong" in the db, I have to check the current time in db here and calculate the time difference,
 //then I apply the correctness and send it corrected to android 
 
-//todo: APPLY 2m50s of correctness!
+//done: APPLY 2m50s of correctness!
 
 //todo: trocar os parâmetros invés de json no body para query params. Assim posso trocar alguns POST para GET, sendo mais semântico.
+
+//todo: check the read attributes from client requests if they are what they are supposed to be
+  //(validate the fields. Ex.: does color iniciate with a #, does it have the correct length...)
+
+//todo: check all error messages and adequate
+
+//done: arrumar função que calcula as médias, está bugando para users novos, pois eles não possuem mamadas
 
 
 const express = require("express");
@@ -112,7 +119,7 @@ async function setStation(data) {
     
     connection.release();
     
-    console.log(`setStation(${data}) return: `, "successful");
+    console.log(`setStation(`, data, `) return: `, "successful");
     return "successful";
    }
     catch(error) {
@@ -123,11 +130,11 @@ async function setStation(data) {
 
 app.route("/station/checkAvailabilityAndPost").post(async (req, res) => {
 
-  const usernameClient = req.body.username;
-  const stationClient = req.body.station;
-  const userColorClient = req.body.userColor; 
-  
   try {
+    const usernameClient = req.body.username;
+    const stationClient = req.body.station;
+    //const userColorClient = req.body.userColorClient; 
+  
     const stationNamesDb = await getStationNames();
     
     const isStationClientNameUsed = stationNamesDb.find(obj => obj.station == stationClient);
@@ -163,13 +170,12 @@ app.route("/station/checkAvailabilityAndPost").post(async (req, res) => {
       console.log("post /checkAvailability response: ", responseJSON);
       res.json(responseJSON);
     }    
-    console.log("Something went really bad in the /checkAvailability post");
   }
   catch (error) {
     console.log('Error retrieving high scores:', error);
+    //console.log("Something went really bad in the /checkAvailability post");
     return res.status(500).json({ error: 'Internal server error' });
   }
-
 });
 
 //mamada
@@ -253,29 +259,33 @@ async function getAndCalculateAverages(data) {
         sum += amounts[k].amount;
       }
       
-      let average = (sum/hours).toFixed(2);
+      let average = (sum/hours).toFixed(1);
       
       return average;
     } 
     
     async function calculateAverageAllTime(amounts) {
       let sum = 0;
-      const firstDatetime = new Date(amounts[amounts.length-1].datetime);
-      const lastDatetime = new Date(amounts[0].datetime);
-      
-      const timeDiff = Math.abs(lastDatetime - firstDatetime);
-      const hoursDiff = ((timeDiff / 1000) / 60) / 60;
-      
-      for(let k = 0; k < amounts.length; k++) {
-        sum += amounts[k].amount;
+      if(amounts.length > 1) {
+        const firstDatetime = new Date(amounts[amounts.length-1].datetime);
+        const lastDatetime = new Date(amounts[0].datetime);
+
+        const timeDiff = Math.abs(lastDatetime - firstDatetime);
+        const hoursDiff = ((timeDiff / 1000) / 60) / 60;
+
+        for(let k = 0; k < amounts.length; k++) {
+          sum += amounts[k].amount;
+        }
+
+        console.log(hoursDiff);      
+        console.log(sum/hoursDiff);
+
+        const averageAllTime = (sum/hoursDiff).toFixed(1);
+
+        return averageAllTime;
+      } else {
+        return 0;
       }
-    
-      console.log(hoursDiff);      
-      console.log(sum/hoursDiff);
-      
-      const averageAllTime = (sum/hoursDiff).toFixed(2);
-      
-      return averageAllTime;
     }
         
     const averagesObject = {
@@ -295,63 +305,88 @@ async function getAndCalculateAverages(data) {
 }
 
 async function makeScreenDataObject(lastMamadas, uniqueUsersArray, uniqueColorsArray, averagesObject) {
-  var usernameArray = [];
-  var stationArray = [];
-  var timeArray = [];
-  var amountArray = [];
-  var colorArray = [];
-  var hours = "";
-  var minutes = "";
-  
-  for(let k = 0; k < lastMamadas.length; k++) {
-    usernameArray[k] = lastMamadas[k].username;
-    stationArray[k] = lastMamadas[k].station;
-    hours = lastMamadas[k].datetime.getHours().toString().padStart(2, '0');
-    minutes = lastMamadas[k].datetime.getMinutes().toString().padStart(2, '0');
-    timeArray[k] = `${hours}:${minutes}`;
-    amountArray[k] = lastMamadas[k].amount;
-    
-    for(let i = 0; i < uniqueUsersArray.length; i++) {
-      if(lastMamadas[k].username == uniqueUsersArray[i]) {
-        colorArray[k] = uniqueColorsArray[i];
-        break;
+  try {
+    var usernameArray = [];
+    var stationArray = [];
+    var timeArray = [];
+    var amountArray = [];
+    var colorArray = [];
+    var hours = "";
+    var minutes = "";
+
+    for(let k = 0; k < lastMamadas.length; k++) {
+      usernameArray[k] = lastMamadas[k].username;
+      stationArray[k] = lastMamadas[k].station;
+      hours = lastMamadas[k].datetime.getHours().toString().padStart(2, '0');
+      minutes = lastMamadas[k].datetime.getMinutes().toString().padStart(2, '0');
+      timeArray[k] = `${hours}:${minutes}`;
+      amountArray[k] = lastMamadas[k].amount;
+
+      for(let i = 0; i < uniqueUsersArray.length; i++) {
+        if(lastMamadas[k].username == uniqueUsersArray[i]) {
+          colorArray[k] = uniqueColorsArray[i];
+          break;
+        }
       }
     }
+
+    const screenDataObject = {
+      usernameArray: usernameArray,
+      stationArray: stationArray,
+      timeArray: timeArray,
+      amountArray: amountArray,
+      colorArray: colorArray,
+      average06: parseFloat(averagesObject.average06),
+      average12: parseFloat(averagesObject.average12),
+      average24: parseFloat(averagesObject.average24),
+      averageAllTime: parseFloat(averagesObject.averageAllTime),
+      message: "successful"
+    }
+
+    console.log(`makeScreenDataObject(lastMamadas, uniqueUsersArray, uniqueColorsArray, averagesObject) return `, screenDataObject);
+    return screenDataObject;
   }
-  
-  const screenDataObject = {
-    usernameArray: usernameArray,
-    stationArray: stationArray,
-    timeArray: timeArray,
-    amountArray: amountArray,
-    colorArray: colorArray,
-    average06: averagesObject.average06,
-    average12: averagesObject.average12,
-    average24: averagesObject.average24,
-    averageAllTime: averagesObject.averageAllTime
+  catch(error) {
+    console.log("Error querying the database:", error);
+    throw new Error("Internal server error");
   }
-  
-  console.log(`makeScreenDataObject(lastMamadas, uniqueUsersArray, uniqueColorsArray, averagesObject) return `, screenDataObject);
-  return screenDataObject;
 }
 
 app.route("/getMamadasScreenData").post(async (req, res) => {
   //the average is not consulted by the app, it is calculated at the time consulting the last 24h amounts.
   //the averages registered in db are for analisys purposes
-  
-  const usernameClient = req.body.username;
-  const stationClient = req.body.station;
-  const userColorClient = req.body.userColor; 
-  
   try {
+    const usernameClient = req.body.username;
+    const stationClient = req.body.station;
+    const userColorClient = req.body.userColor; //todo: I think I can remove this line, check it later
+ 
     const last6Mamadas = await getMamadas(req.body, 6); //object array: username, station, datetime ("2023-04-10T16:04:15.000Z"), amount
-    const uniqueUsersArray = await getDistinctUsernames(last6Mamadas); //array: distinct usernames
-    const uniqueColorsArray = await getUsersColors(uniqueUsersArray, req.body.station); //array: distinct colors
-    const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
     
-    const screenDataObject = await makeScreenDataObject(last6Mamadas, uniqueUsersArray, uniqueColorsArray, averagesObject);        
-    
-    res.json(screenDataObject);    
+    if(last6Mamadas.length > 0) { 
+      console.log("LOOK THIS VALUE!", last6Mamadas);
+      const uniqueUsersArray = await getDistinctUsernames(last6Mamadas); //array: distinct usernames
+      const uniqueColorsArray = await getUsersColors(uniqueUsersArray, req.body.station); //array: distinct colors
+      const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
+
+      const screenDataObject = await makeScreenDataObject(last6Mamadas, uniqueUsersArray, uniqueColorsArray, averagesObject);     
+      
+      res.json(screenDataObject);    
+    } else {
+      const screenDataObject = 
+            {
+              "usernameArray": [],
+              "stationArray": [],
+              "timeArray": [],
+              "amountArray": [],
+              "colorArray": [],
+              "average06": 0.0,
+              "average12": 0.0,
+              "average24": 0.0,
+              "averageAllTime": 0,
+              "message": "noData"
+            }
+      res.json(screenDataObject);    
+    }  
     
   }
   catch(error) {
@@ -360,189 +395,79 @@ app.route("/getMamadasScreenData").post(async (req, res) => {
   }
 });
 
-//todo: post na rota "/mamada"
-  //verifica a média antes de postar (para registrar no banco o valor das médias quando ela ficou com fome), pode ser pelo post na "/getMamadasScreenData", pelo menos por enquanto
-  //client envia username, station, (color client pega do banco), time*, amount. As médias são calculadas na hora de postar, com os dados do db.
+//mamada post
+
+async function setMamada(data) {
+  try {
+    const connection = await pool.getConnection();
+    
+    //I am not using client's time, I am inserting a timestamp
+    //When I use client's time, and accept a past time, I will have to recalculate the 3 averages after that given time
+    const [results, fields] = await connection.query(
+      `INSERT INTO mamada (username, station, datetime, amount, average_6, average_12, average_24) 
+       VALUES ('${data.username}', '${data.station}', NOW(), '${data.amount}', '${data.average06}', '${data.average12}', '${data.average24}')`
+    );
+    
+    connection.release();
+
+    let response = {
+      message: "successful"
+    }
+    
+    console.log(`setMamada(`, data, `) return: `, response);
+    return response;  
+  }
+  catch(error) {
+    console.log("Error querying the database:", error);
+    throw new Error("Internal server error");
+  } 
+}
+
+app.route("/mamada").post(async (req, res) => {
   
-  //Fazer a primeira versão sem poder postar um tempo passado, somente no tempo atual
+  try {
+  
+    const usernameClient = req.body.username;
+    const stationClient = req.body.station;
+    const timeClient = req.body.time;
+    const amountClient = req.body.amount;
+    //const userColorClient = req.body.userColor; //this data I must get directly from db
+    //I also need to get db data and calculate the 3 averages
+  
+    const userColor = (await getUsersColors([req.body.username], req.body.station))[0];
+    const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
+    
+    const mamadaObject = {
+      username: req.body.username,
+      station: req.body.station,
+      time: req.body.time,
+      amount: req.body.amount,
+      color: userColor,
+      average06: averagesObject.average06,
+      average12: averagesObject.average12,
+      average24: averagesObject.average24
+    }
+    
+    const message = await setMamada(mamadaObject);    
+    res.json(message);    
+    
+  }
+  catch(error) {
+    console.log("Error querying the database:", error);
+    throw new Error("Internal server error");
+  }
+});
+
+//done: post na rota "/mamada"
+  //done: verifica a média antes de postar (para registrar no banco o valor das médias quando ela ficou com fome), pode ser pelo post na "/getMamadasScreenData", pelo menos por enquanto
+  //done: client envia username, station, (color a API pega do banco), time*, amount. As médias são calculadas na hora de postar, com os dados do db.
+  
+  //done: Fazer a primeira versão sem poder postar um tempo passado, somente no tempo atual
   //todo: *(se não editar o time, pega o time do banco + 2m50s, se editar aí tenho que ver como fazer. As médias terão que ser calculadas somente até aquele momento mencionado)
   //todo: pra ficar bem top, tem que recalcular todas as médias posteriores ao post da mamada com o tempo editado, pois interferiu né...
 
+
   //todo: get na rota "/pending": checa se está pendente ou é owner de station com pending users 
-
-
-//daqui pra baixo apenas reciclei o código anterior, deletar
-
-//get the score for a determined position
-//return a json object
-async function getScore(position) { 
-  try {
-    const connection = await pool.getConnection();
-       
-    var [scoreN, fields] = await connection.query(`SELECT score FROM scoreboard ORDER BY score DESC LIMIT 1 OFFSET ${position-1}`);
-    
-    connection.release();
-    
-    console.log(`getScore(${position}) return: `, scoreN[0]);
-    return scoreN[0];
-  
-  }
-  catch(error) {
-    console.log("Error querying the database:", error);
-    throw new Error("Internal server error");
-  }
-    
-}
-
-//get user's previous high score, date and its position, 0 means that they dont exists in db
-//returns a json object with score, date and position when this high score exists or 0 when it does not exist
-async function getUserHighScore(userId) {
-  try {
-    const connection = await pool.getConnection();
-        
-    var [resultsHighScoreAndDate, fields] = await connection.query(`SELECT score, date FROM scoreboard WHERE user_id = '${userId}'`);
-    var [resultUserPosition, fields] = await connection.query(`SELECT COUNT(*) + 1 AS position FROM scoreboard WHERE score > (SELECT score FROM scoreboard WHERE user_id = '${userId}') ORDER BY score DESC`);
-    
-    var userPreviousHighScoreIndexAndDateObject = 0;
-    if(resultsHighScoreAndDate.length > 0) {
-      userPreviousHighScoreIndexAndDateObject = {
-        score: resultsHighScoreAndDate[0].score,
-        date: resultsHighScoreAndDate[0].date,
-        position: resultUserPosition[0].position
-      }
-    }
-    
-    connection.release();
-    
-    console.log(`getUserHighScore(${userId}) return: `, userPreviousHighScoreIndexAndDateObject);
-    return userPreviousHighScoreIndexAndDateObject;
-  }
-  catch(error) {
-    console.log("Error querying the database:", error);
-    throw new Error("Internal server error");
-  }
-}
-
-async function setUserHighScore(data) {
-  try {
-    const connection = await pool.getConnection();
-    
-    //delete before set
-    //this query consider user_id as primary key, if I let an user to register more than one score in scoreboad,
-      //I will have to change it
-    await connection.query(`DELETE FROM scoreboard WHERE user_id = '${data.userId}'`);
-  
-    //I am adding 3 minutes because the time in the machine server is 3 minutes late
-    var [results, fields] = await connection.query(`INSERT INTO scoreboard (user_id, score, date) VALUES ('${data.userId}', '${data.score}',  DATE_ADD(NOW(), INTERVAL 3 MINUTE))`);
-  
-    var newHighScore = await getUserHighScore(data.userId);
-    console.log(`setUserHighScore(${data}) return: `, newHighScore);
-    return newHighScore;
-   }
-    catch(error) {
-    console.log("Error querying the database:", error);
-    throw new Error("Internal server error");
-  }
-}
-
-app.route("/highscore").post(async (req, res) => {
-  if (req.body.tempSignature != "42arkanoidisfun42") {
-    res.status(401).send("Invalid access");
-  } else {
-    var scoreReceived = req.body;
-    var lastScoreScoreboard = await getScore(10);
-    
-    try {
-      
-      var dbUserHighScore = await getUserHighScore(scoreReceived.userId);
-      //console.log(dbUserHighScore);
-          
-      if(dbUserHighScore == 0) {
-        var newHighScore = await setUserHighScore(scoreReceived);
-                
-        //case 1: user set up his first score, in the scoreboard
-        if(newHighScore.score > lastScoreScoreboard.score) {
-          var responseJSON = {
-            message: "firstScoreInScoreboard",
-            newPosition: newHighScore.position
-          }
-          
-          console.log("finish POST score");
-          res.json(responseJSON);     
-        } 
-        
-        //case 2: user set up his first score, out of the scoreboard
-        else {
-          var responseJSON = {
-            message: "firstScoreOutOfScoreboard",
-            newPosition: newHighScore.position
-          }
-          
-          console.log("finish POST score");
-          res.json(responseJSON);     
-        }
-         
-      } 
-      
-      else if(scoreReceived.score > dbUserHighScore.score) {
-        
-        //case 3: user beat its personal record, but did not enter to the scoreboard
-        if(scoreReceived.score <= lastScoreScoreboard.score) {
-        var newHighScore = await setUserHighScore(scoreReceived);
-        
-        var responseJSON = {
-          message: "personalHighScore",
-          dbScore: dbUserHighScore.score,
-          dbDate: dbUserHighScore.date,
-          dbPosition: dbUserHighScore.position,
-          newPosition: newHighScore.position
-        }
-        
-        console.log("finish POST score");
-        res.json(responseJSON);
-        }
-        
-        //case 4: user beat its personal record, and entered to the scoreboard    
-        else if(scoreReceived.score > lastScoreScoreboard.score) {
-          //console.log("estive aqui");
-          var newHighScore = await setUserHighScore(scoreReceived);
-
-          var responseJSON = {
-            message: "socoreboardHighScore",
-            dbScore: dbUserHighScore.score,
-            dbDate: dbUserHighScore.date,
-            dbPosition: dbUserHighScore.position,
-            newPosition: newHighScore.position
-          }
-
-          console.log("finish POST score");
-          res.json(responseJSON);
-          }
-      
-      
-      }
-      
-      //case 5: this user has a better score in the db
-      else {
-        var responseJSON = {
-          message: "notHighScore",
-          dbScore: dbUserHighScore.score,
-          dbDate: dbUserHighScore.date,
-          dbPosition: dbUserHighScore.position,
-          //todo: query para saber qual a posição mais próxima do score feito
-        }
-        
-        console.log("finish POST score");
-        res.json(responseJSON);
-      }
-
-    }
-    catch (error) {
-      console.log('Error retrieving high scores:', error);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
-  }
-});
     
     
   
