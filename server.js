@@ -16,6 +16,7 @@
 //done: arrumar função que calcula as médias, está bugando para users novos, pois eles não possuem mamadas
 
 
+
 const express = require("express");
 const mysql = require('mysql2/promise');
 const app = express();
@@ -243,26 +244,27 @@ async function getUsersColors(usersArray, station) {
 async function getAndCalculateAverages(data) {
 
   try {
+   
     const connection = await pool.getConnection();
-    
+
     const [amounts06, fields06] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 6 HOUR)`);   
     const [amounts12, fields12] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 12 HOUR)`);
     const [amounts24, fields24] = await connection.query(`SELECT amount FROM mamada WHERE station = '${data.station}' AND datetime >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`);
     const [amountsAndTimeAll, fieldsAllTime] = await connection.query(`SELECT amount, datetime FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC`);
 
     connection.release();
-    
+
     async function calculateAverage(amounts, hours) {
       let sum = 0;
-      
+
       for(let k = 0; k < amounts.length; k++) {
         sum += amounts[k].amount;
       }
-      
+
       let average = (sum/hours).toFixed(1);
-      
+
       return average;
-    } 
+    }
     
     async function calculateAverageAllTime(amounts) {
       let sum = 0;
@@ -281,13 +283,18 @@ async function getAndCalculateAverages(data) {
         console.log(sum/hoursDiff);
 
         const averageAllTime = (sum/hoursDiff).toFixed(1);
+        
+        console.log("AVERAGE ALL TIME: ", amounts);
+        console.log("TYPE OF: averageAllTime: ", typeof (hoursDiff));
 
+        //console.log("LOOOOK THIS AMOUNTS ARRAY: ", amounts);
         return averageAllTime;
       } else {
         return 0;
       }
     }
         
+    
     const averagesObject = {
       average06: await calculateAverage(amounts06, 6),
       average12: await calculateAverage(amounts12, 12),
@@ -358,12 +365,12 @@ app.route("/getMamadasScreenData").post(async (req, res) => {
   try {
     const usernameClient = req.body.username;
     const stationClient = req.body.station;
-    const userColorClient = req.body.userColor; //todo: I think I can remove this line, check it later
+    //const userColorClient = req.body.userColor; //todo: I think I can remove this line, check it later
  
     const last6Mamadas = await getMamadas(req.body, 6); //object array: username, station, datetime ("2023-04-10T16:04:15.000Z"), amount
     
     if(last6Mamadas.length > 0) { 
-      console.log("LOOK THIS VALUE!", last6Mamadas);
+      //console.log("LOOK THIS VALUE!", last6Mamadas);
       const uniqueUsersArray = await getDistinctUsernames(last6Mamadas); //array: distinct usernames
       const uniqueColorsArray = await getUsersColors(uniqueUsersArray, req.body.station); //array: distinct colors
       const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
@@ -401,21 +408,82 @@ async function setMamada(data) {
   try {
     const connection = await pool.getConnection();
     
-    //I am not using client's time, I am inserting a timestamp
-    //When I use client's time, and accept a past time, I will have to recalculate the 3 averages after that given time
-    const [results, fields] = await connection.query(
-      `INSERT INTO mamada (username, station, datetime, amount, average_6, average_12, average_24) 
-       VALUES ('${data.username}', '${data.station}', NOW(), '${data.amount}', '${data.average06}', '${data.average12}', '${data.average24}')`
-    );
+    //check if a merge is needed
+    const [lastMamada, fields] = await connection.query(`SELECT datetime, amount, average_6, average_12, average_24, NOW() as now FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC LIMIT 1`);
+    console.log("LOOOK THIS lastMamada: ", lastMamada); // { datetime: 2023-04-14T15:27:49.000Z, amount: 270, now: 2023-04-14T15:32:31.000Z }
     
-    connection.release();
+    
+    //todo: melhorar esse código, tá muito gambiarra
+    var isMerge = false;
+    //var minutesDiff = 32;
+    
+    if(lastMamada.length > 0) {
+      const lastDatetime = new Date(lastMamada[0].datetime);
+      const now = new Date(lastMamada[0].now);
 
-    let response = {
-      message: "successful"
+      var timeDiff = Math.abs(now - lastDatetime);
+      var minutesDiff = ((timeDiff / 1000) / 60);
+      
+      if(minutesDiff < 31) {
+        isMerge = true;
+      } else {
+        isMerge = false;
+      }
+    
+    
+    } else {
+      isMerge = false;
     }
     
-    console.log(`setMamada(`, data, `) return: `, response);
-    return response;  
+
+    if(isMerge) {
+      
+      let mergedAmount = data.amount + lastMamada[0].amount;
+      //let mergedTime = lastMamada[0].datetime + timeDiff/2;
+      
+      console.log("merge things: ", mergedAmount);
+      
+      const [resultsDelete, fields3] = await connection.query(`DELETE FROM mamada WHERE station = '${data.station}' ORDER BY datetime DESC LIMIT 1`);
+      
+      //todo: I have to call the getAverages function here (not outside this function), and use the value before the last one,
+      // because the averages I must consider are the averages before this mamada, an I have to create a parameter "newValue" or "merge"
+      
+      const [results, fields2] = await connection.query(
+        `INSERT INTO mamada (username, station, datetime, amount, average_6, average_12, average_24) 
+         VALUES ('${data.username}', '${data.station}', DATE_SUB(NOW(), INTERVAL ${Math.round(minutesDiff/2)} MINUTE), '${mergedAmount}', '${lastMamada[0].average06}', '${lastMamada[0].average12}', '${lastMamada[0].average24}')`
+      );
+      
+      
+      connection.release();
+
+      let response = {
+        message: "successful"
+      }
+
+      console.log("A merge ocurred!");
+      console.log(`setMamada(`, data, `) return: `, response);
+      return response; 
+      
+    } else {
+      
+      const averagesObject = await getAndCalculateAverages(data); //object: average06, average12, average24, averageAllTime
+      
+      //I am not using client's time, I am inserting a timestamp
+      //When I use client's time, and accept a past time, I will have to recalculate the 3 averages after that given time
+      const [results, fields2] = await connection.query(
+        `INSERT INTO mamada (username, station, datetime, amount, average_6, average_12, average_24) 
+         VALUES ('${data.username}', '${data.station}', NOW(), '${data.amount}', '${averagesObject.average06}', '${averagesObject.average12}', '${averagesObject.average24}')`
+      );
+
+      connection.release();
+
+      let response = {
+        message: "successful"
+      }
+
+      console.log(`setMamada(`, data, `) return: `, response);
+      return response;  
+    } 
   }
   catch(error) {
     console.log("Error querying the database:", error);
@@ -435,17 +503,17 @@ app.route("/mamada").post(async (req, res) => {
     //I also need to get db data and calculate the 3 averages
   
     const userColor = (await getUsersColors([req.body.username], req.body.station))[0];
-    const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
+    //const averagesObject = await getAndCalculateAverages(req.body); //object: average06, average12, average24, averageAllTime
     
     const mamadaObject = {
       username: req.body.username,
       station: req.body.station,
       time: req.body.time,
-      amount: req.body.amount,
-      color: userColor,
+      amount: +req.body.amount,
+      color: userColor/*,
       average06: averagesObject.average06,
       average12: averagesObject.average12,
-      average24: averagesObject.average24
+      average24: averagesObject.average24*/
     }
     
     const message = await setMamada(mamadaObject);    
