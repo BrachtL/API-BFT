@@ -1,3 +1,16 @@
+//todo: create a clone server for implementation
+
+//todo: tests
+  //create auto tests!!
+    //create another server-side API for tests
+    //create tests in android for test android and API
+
+//todo: modelagem
+  //fazer os diagramas de funções e de dados do client
+  //fazer os diagramas de funções, de recursos e de dados da API
+
+
+
 //my db in freemysqlhosting is late by about 3 minutes, but I can't fix it
 //for this application, the best is to save in the db the time "wrong" (with this late) because I consult the last 24h
 //if I save it with a correctness, I will consult it wrong afterwards
@@ -19,6 +32,7 @@
 
 const express = require("express");
 const mysql = require('mysql2/promise');
+const startTimer = require('./timer');
 const app = express();
 
 app.listen(3000);
@@ -39,6 +53,8 @@ process.on('unhandledRejection', (err) => {
 //middleware (ponte entre requests)
 app.use(express.json()); //possibilita executar json
 
+setImmediate(startTimer);
+
 //check if server is online
 app.route("/").get((requirement, response) => {
   response.send("The server is online");
@@ -54,25 +70,9 @@ const pool = mysql.createPool({
   idleTimeout: 270000 // set the idle timeout to 3 minutes
 });
 
-async function getCurrentDbTime() {
-  try {
-    const connection = await pool.getConnection();
+//////////
 
-    const [rows, fields] = await connection.query('SELECT TIME(NOW())');
-    
-    connection.release();
-    
-    const currentDbTime = rows;
-    console.log(`Current time is:`, currentDbTime);
-    return currentDbTime;
-  }
-  catch(error) {
-    console.log("Error getting database time:", error);
-  }
-}
 
-var currentDbTime = getCurrentDbTime();
-//is it always 2m50s?
 
 //POST
 
@@ -448,9 +448,13 @@ async function setMamada(data) {
       //todo: I have to call the getAverages function here (not outside this function), and use the value before the last one,
       // because the averages I must consider are the averages before this mamada, an I have to create a parameter "newValue" or "merge"
       
+      
+      const averagesObject = await getAndCalculateAverages(data);
+      
+      
       const [results, fields2] = await connection.query(
         `INSERT INTO mamada (username, station, datetime, amount, average_6, average_12, average_24) 
-         VALUES ('${data.username}', '${data.station}', DATE_SUB(NOW(), INTERVAL ${Math.round(minutesDiff/2)} MINUTE), '${mergedAmount}', '${lastMamada[0].average06}', '${lastMamada[0].average12}', '${lastMamada[0].average24}')`
+         VALUES ('${data.username}', '${data.station}', DATE_SUB(NOW(), INTERVAL ${Math.round(minutesDiff/2)} MINUTE), '${mergedAmount}', '${lastMamada[0].average_6}', '${lastMamada[0].average_12}', '${lastMamada[0].average_24}')`
       );
       
       
