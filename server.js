@@ -1,3 +1,10 @@
+//todo: check all queries, the result could be a [] (length = 0) and some code received an undefined and it be a problem for new users. I need to deal with the [] query result case 
+
+//when making just one query, instead of using pool.getConnection(), connection.query(), and connection.release(), I can simply use pool.query()
+
+//todo: in keep server alive function, send a request to check if the server is online, check if it worked
+
+
 //todo: create a clone server for implementation
 
 //todo: tests
@@ -67,11 +74,23 @@ const pool = mysql.createPool({
   password: 'CCArxAhbqc',
   database: 'sql10611177',
   connectionLimit: 10,
-  idleTimeout: 270000 // set the idle timeout to 3 minutes
+  idleTimeout: 270000, // set the idle timeout to 4m30s
 });
 
 //////////
 
+async function keepAlive() {
+  console.log('Pinging database to keep connection alive...');
+  await pool.query('SELECT 1');
+}
+
+setInterval(() => {
+  setTimeout(() => {
+    keepAlive();
+  }, 0);
+}, 245000);
+
+keepAlive();
 
 
 //POST
@@ -424,7 +443,7 @@ async function setMamada(data) {
       var timeDiff = Math.abs(now - lastDatetime);
       var minutesDiff = ((timeDiff / 1000) / 60);
       
-      if(minutesDiff < 31) {
+      if(minutesDiff < 32) {
         isMerge = true;
       } else {
         isMerge = false;
@@ -529,6 +548,83 @@ app.route("/mamada").post(async (req, res) => {
     throw new Error("Internal server error");
   }
 });
+
+
+//get diaper data
+
+async function getDiaperTimerDuration(station, username) {
+  try {
+    const connection = await pool.getConnection();
+    
+    //querying the db already applying the plus 2m50s correctness      
+    const [result, fields] = await connection.query(`SELECT DATE_ADD(datetime, INTERVAL '2:50' MINUTE_SECOND) AS datetime, DATE_ADD(NOW(), INTERVAL '2:50' MINUTE_SECOND) as now FROM diaper WHERE station = '${station}' ORDER BY datetime DESC LIMIT 1`);
+
+    
+    
+    console.log(result.length);
+    
+    if(result.length == 0) {
+      const [results2, fields2] = await connection.query(`INSERT INTO diaper (station, datetime, username) VALUES ('${station}', NOW(), '${username}')`);
+      connection.release();
+      return 14400000;
+      
+    } else {
+    
+      connection.release();
+    
+      const lastDiaperChangeDatetime = new Date(result[0].datetime);
+      const nowDatetime = new Date(result[0].now);
+
+      const elapsedTimeMS = nowDatetime - lastDiaperChangeDatetime;
+
+      const timeLeftMS = 14400000 - elapsedTimeMS; //14400000 = 4h
+
+      console.log(`getDiaperTimerDuration(${station}) return: `, timeLeftMS);
+      return timeLeftMS; //tenho que retornar um duration in ms
+    }
+   }
+  catch(error) {
+    console.log("Error querying the database:", error);
+    throw new Error("Internal server error");
+  }
+}
+
+
+
+app.route("/getDiaperTimerDuration").get(async (req, res) => {
+  //for this application, the best is to save in the db the time "wrong"
+  try {
+    
+    var { station, username } = req.query;
+    var station = decodeURIComponent(station);
+    var username = decodeURIComponent(username);
+    console.log(station);
+    console.log(username);
+ 
+    const timerDuration = await getDiaperTimerDuration(station, username);
+    var message = "noData"
+    if(timerDuration > 0) {
+      message = "noNeedToChange"
+    } else {
+      message = "needToChange"
+    }
+    
+    const diaperTimerDataObject = 
+      {
+        "timerDuration": timerDuration,
+        "message": message
+      }
+    
+    //res.json(timerDuration); 
+    res.json(diaperTimerDataObject); 
+    
+  }
+  catch(error) {
+    console.log("Error querying the database:", error);
+    throw new Error("Internal server error");
+  }
+});
+
 
 //done: post na rota "/mamada"
   //done: verifica a média antes de postar (para registrar no banco o valor das médias quando ela ficou com fome), pode ser pelo post na "/getMamadasScreenData", pelo menos por enquanto

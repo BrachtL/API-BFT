@@ -27,10 +27,15 @@ async function getCurrentDbTime() {
   }
 }
 
+
+
 //var currentDbTime = getCurrentDbTime();
 //is it always 2m50s?
 
 module.exports = async function sectionRenewer() {
   await getCurrentDbTime();
-  setInterval(async () => await getCurrentDbTime(), 240000);
-};
+  setInterval(async () => { 
+    console.log("keep server alive:");
+    await getCurrentDbTime();
+  }, 240000);
+}
